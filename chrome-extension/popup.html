@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>HN Summarizer Settings</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 13px;
+      width: 300px;
+      padding: 16px;
+      color: #333;
+    }
+    h1 {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 14px;
+      color: #ff6600;
+    }
+    label {
+      display: block;
+      font-weight: 500;
+      margin-bottom: 4px;
+      margin-top: 12px;
+    }
+    input {
+      width: 100%;
+      padding: 6px 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 12px;
+      font-family: monospace;
+    }
+    input:focus {
+      outline: none;
+      border-color: #ff6600;
+    }
+    button {
+      margin-top: 16px;
+      width: 100%;
+      padding: 8px;
+      background: #ff6600;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    button:hover { background: #e55a00; }
+    #status {
+      margin-top: 8px;
+      font-size: 12px;
+      text-align: center;
+      color: #666;
+      height: 16px;
+    }
+    .hint {
+      font-size: 11px;
+      color: #888;
+      margin-top: 3px;
+    }
+  </style>
+</head>
+<body>
+  <h1>HN Summarizer</h1>
+
+  <label for="perplexityKey">Perplexity API Key</label>
+  <input type="password" id="perplexityKey" placeholder="pplx-…">
+  <p class="hint">Used to fetch article and summarize comments</p>
+
+  <button id="saveBtn">Save</button>
+  <div id="status"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+.hn-summarize-btn {
+  color: #828282;
+  font-size: 7pt;
+  text-decoration: none;
+}
+
+.hn-summarize-btn:hover {
+  text-decoration: underline;
+  color: #ff6600;
+}
+
+.hn-summarize-btn.loading {
+  color: #ff6600;
+  cursor: wait;
+}
+
+.hn-summarize-btn-item {
+  font-size: 8pt;
+}
