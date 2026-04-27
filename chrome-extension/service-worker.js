@@ -1,9 +1,7 @@
 // Service worker: fetch HN comments via Algolia, then one Perplexity call for everything
+// Config is loaded via importScripts (see manifest)
 
-const PERPLEXITY_API_URL = 'https://api.perplexity.ai/v1/agent';
-const PERPLEXITY_MODEL = 'anthropic/claude-sonnet-4-6';
-const ALGOLIA_API_URL = 'https://hn.algolia.com/api/v1/items/';
-const MAX_COMMENT_CHARS = 100000;
+importScripts('config.js');
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.action !== 'summarize') return;
@@ -15,8 +13,10 @@ async function handleSummarize({ itemId, articleUrl, title }) {
   // Open results tab immediately
   const tab = await chrome.tabs.create({ url: chrome.runtime.getURL('results.html') });
   const tabId = tab.id;
+  console.log('[HN] Results tab opened, waiting for ready signal...');
 
   await waitForResultsReady(tabId);
+  console.log('[HN] Results page ready. Sending init...');
   await sendToTab(tabId, { type: 'init', title, itemId, articleUrl });
 
   const { perplexityKey } = await chrome.storage.sync.get(['perplexityKey']);
@@ -24,6 +24,7 @@ async function handleSummarize({ itemId, articleUrl, title }) {
     await sendToTab(tabId, { type: 'error', message: 'Perplexity API key not set. Click the extension icon to configure it.' });
     return;
   }
+  console.log('[HN] API key found. Starting Algolia + Perplexity calls...');
 
   try {
     // Fetch comments from Algolia (fast, no AI needed)
@@ -33,50 +34,58 @@ async function handleSummarize({ itemId, articleUrl, title }) {
     const summary = await fetchCombinedSummary(articleUrl, commentsText, perplexityKey);
     await sendToTab(tabId, { type: 'result', summary });
   } catch (err) {
+    console.error('[HN] Error:', err);
     await sendToTab(tabId, { type: 'error', message: err.message });
   }
 }
 
 async function fetchAlgoliaComments(itemId) {
-  const res = await fetch(ALGOLIA_API_URL + itemId);
+  console.log('[HN] Fetching Algolia comments for item', itemId);
+  const res = await fetch(CONFIG.algoliaApiUrl + itemId);
+  console.log('[HN] Algolia response status:', res.status);
   if (!res.ok) throw new Error(`Algolia API ${res.status}`);
   const data = await res.json();
 
   const flat = flattenComments(data);
-  if (!flat.trim()) return null;
+  if (!flat.trim()) {
+    console.log('[HN] No comments found');
+    return null;
+  }
 
-  return flat.length > MAX_COMMENT_CHARS
-    ? flat.slice(0, MAX_COMMENT_CHARS) + '\n\n*(comments truncated due to length)*'
+  console.log('[HN] Comments fetched, length:', flat.length);
+  return flat.length > CONFIG.maxCommentChars
+    ? flat.slice(0, CONFIG.maxCommentChars) + '\n\n*(comments truncated due to length)*'
     : flat;
 }
 
 async function fetchCombinedSummary(articleUrl, commentsText, apiKey) {
   const isSelfPost = !articleUrl || articleUrl.startsWith('https://news.ycombinator.com');
+  console.log('[HN] Calling Perplexity API. isSelfPost:', isSelfPost, 'articleUrl:', articleUrl);
 
   let input;
   if (isSelfPost) {
     input = commentsText
-      ? `Summarize the following Hacker News discussion:\n\n${commentsText}`
-      : 'This is an Ask HN / self-post with no comments yet.';
+      ? CONFIG.selfPostInput(commentsText)
+      : CONFIG.selfPostEmptyInput;
   } else {
     input = commentsText
-      ? `Fetch the article at this URL and summarize it: ${articleUrl}\n\nThen, separately summarize the Hacker News discussion below.\n\n--- HN COMMENTS ---\n\n${commentsText}`
-      : `Fetch and summarize the article at this URL: ${articleUrl}`;
+      ? CONFIG.articleWithCommentsInput(articleUrl, commentsText)
+      : CONFIG.articleOnlyInput(articleUrl);
   }
 
   const instructions = isSelfPost
-    ? 'Summarize the HN discussion. Focus on: dominant themes and opinions, notable debates or disagreements, insightful comments, any corrections or additional context provided by commenters. Use markdown with clear headers.'
-    : 'Use fetch_url to retrieve the full article. Then produce two sections:\n\n## 📰 Article Summary\nCover the main argument, key points, notable data or anecdotes, and conclusions.\n\n## 💬 HN Comments Summary\nFocus on: dominant themes and opinions, notable debates or disagreements, insightful comments, corrections or additional context provided by commenters.\n\nBe concise but comprehensive. Use markdown.';
+    ? CONFIG.selfPostInstructions
+    : CONFIG.articleInstructions;
 
   const payload = {
-    model: PERPLEXITY_MODEL,
+    model: CONFIG.perplexityModel,
     input,
     tools: isSelfPost ? [] : [{ type: 'fetch_url' }],
     instructions,
-    max_output_tokens: 4096,
+    max_output_tokens: CONFIG.maxOutputTokens,
   };
 
-  const res = await fetch(PERPLEXITY_API_URL, {
+  const res = await fetch(CONFIG.perplexityApiUrl, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
@@ -85,9 +94,24 @@ async function fetchCombinedSummary(articleUrl, commentsText, apiKey) {
     body: JSON.stringify(payload),
   });
 
+  console.log('[HN] Perplexity response status:', res.status);
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Perplexity API ${res.status}: ${text.slice(0, 200)}`);
+    const headers = Object.fromEntries(res.headers.entries());
+    console.error('[HN] Perplexity error:', {
+      status: res.status,
+      statusText: res.statusText,
+      headers,
+      body: text.slice(0, 2000),
+      model: CONFIG.perplexityModel,
+      url: CONFIG.perplexityApiUrl,
+    });
+    let detail = text.slice(0, 300);
+    try {
+      const parsed = JSON.parse(text);
+      detail = parsed.error?.message || parsed.detail || parsed.message || detail;
+    } catch { /* not JSON, use raw text */ }
+    throw new Error(`Perplexity API error ${res.status} (${res.statusText}): ${detail}`);
   }
 
   const data = await res.json();
@@ -96,6 +120,7 @@ async function fetchCombinedSummary(articleUrl, commentsText, apiKey) {
     .flatMap(o => (o.content || []).map(c => c.text))
     .filter(Boolean);
 
+  console.log('[HN] Perplexity returned', texts.length, 'message segments');
   return texts.join('\n\n') || '*(Perplexity returned no content)*';
 }
 

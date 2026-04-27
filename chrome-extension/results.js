@@ -38,8 +38,17 @@ function handleResult({ summary }) {
 
 function showError(message) {
   const banner = document.getElementById('error-banner');
-  banner.textContent = message;
   banner.classList.remove('hidden');
+  banner.innerHTML = '';
+
+  const summary = document.createElement('strong');
+  summary.textContent = 'Error loading summary';
+  banner.appendChild(summary);
+
+  const details = document.createElement('pre');
+  details.style.cssText = 'margin-top:8px;white-space:pre-wrap;word-break:break-word;font-size:0.85em;opacity:0.9;';
+  details.textContent = message;
+  banner.appendChild(details);
 
   const el = document.getElementById('summary-content');
   el.classList.remove('loading');

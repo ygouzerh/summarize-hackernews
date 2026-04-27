@@ -32,16 +32,21 @@ function injectButtons() {
       e.preventDefault();
       btn.textContent = 'summarizing…';
       btn.classList.add('loading');
-      chrome.runtime.sendMessage(
-        { action: 'summarize', itemId, articleUrl, title },
-        () => {
-          // Re-enable after a moment (tab opened)
-          setTimeout(() => {
-            btn.textContent = 'summarize';
-            btn.classList.remove('loading');
-          }, 2000);
-        }
-      );
+      try {
+        chrome.runtime.sendMessage(
+          { action: 'summarize', itemId, articleUrl, title },
+          () => {
+            // Re-enable after a moment (tab opened)
+            setTimeout(() => {
+              btn.textContent = 'summarize';
+              btn.classList.remove('loading');
+            }, 2000);
+          }
+        );
+      } catch {
+        btn.textContent = 'reload page';
+        btn.classList.remove('loading');
+      }
     });
 
     subtext.appendChild(document.createTextNode(' | '));
@@ -65,15 +70,20 @@ function injectButtons() {
         e.preventDefault();
         btn.textContent = 'summarizing…';
         btn.classList.add('loading');
-        chrome.runtime.sendMessage(
-          { action: 'summarize', itemId, articleUrl, title },
-          () => {
-            setTimeout(() => {
-              btn.textContent = 'summarize';
-              btn.classList.remove('loading');
-            }, 2000);
-          }
-        );
+        try {
+          chrome.runtime.sendMessage(
+            { action: 'summarize', itemId, articleUrl, title },
+            () => {
+              setTimeout(() => {
+                btn.textContent = 'summarize';
+                btn.classList.remove('loading');
+              }, 2000);
+            }
+          );
+        } catch {
+          btn.textContent = 'reload page';
+          btn.classList.remove('loading');
+        }
       });
 
       const subtext = document.querySelector('.subtext');
