@@ -30,8 +30,8 @@ async function handleSummarize({ itemId, articleUrl, title }) {
     // Fetch comments from Algolia (fast, no AI needed)
     const commentsText = await fetchAlgoliaComments(itemId);
 
-    // One Perplexity call: fetch article + summarize both
-    const summary = await fetchCombinedSummary(articleUrl, commentsText, perplexityKey);
+    // One Perplexity call: research article via web_search + summarize both
+    const summary = await fetchCombinedSummary(articleUrl, commentsText, perplexityKey, title);
     await sendToTab(tabId, { type: 'result', summary });
   } catch (err) {
     console.error('[HN] Error:', err);
@@ -39,9 +39,29 @@ async function handleSummarize({ itemId, articleUrl, title }) {
   }
 }
 
+async function fetchWithTimeout(url, options, timeoutMs, label) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s. The site may be slow or blocking automated access — try again or open the article directly.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchAlgoliaComments(itemId) {
   console.log('[HN] Fetching Algolia comments for item', itemId);
-  const res = await fetch(CONFIG.algoliaApiUrl + itemId);
+  const res = await fetchWithTimeout(
+    CONFIG.algoliaApiUrl + itemId,
+    {},
+    CONFIG.algoliaTimeoutMs,
+    'Algolia comments fetch'
+  );
   console.log('[HN] Algolia response status:', res.status);
   if (!res.ok) throw new Error(`Algolia API ${res.status}`);
   const data = await res.json();
@@ -58,7 +78,7 @@ async function fetchAlgoliaComments(itemId) {
     : flat;
 }
 
-async function fetchCombinedSummary(articleUrl, commentsText, apiKey) {
+async function fetchCombinedSummary(articleUrl, commentsText, apiKey, title) {
   const isSelfPost = !articleUrl || articleUrl.startsWith('https://news.ycombinator.com');
   console.log('[HN] Calling Perplexity API. isSelfPost:', isSelfPost, 'articleUrl:', articleUrl);
 
@@ -69,8 +89,8 @@ async function fetchCombinedSummary(articleUrl, commentsText, apiKey) {
       : CONFIG.selfPostEmptyInput;
   } else {
     input = commentsText
-      ? CONFIG.articleWithCommentsInput(articleUrl, commentsText)
-      : CONFIG.articleOnlyInput(articleUrl);
+      ? CONFIG.articleWithCommentsInput(articleUrl, commentsText, title)
+      : CONFIG.articleOnlyInput(articleUrl, title);
   }
 
   const instructions = isSelfPost
@@ -80,19 +100,37 @@ async function fetchCombinedSummary(articleUrl, commentsText, apiKey) {
   const payload = {
     model: CONFIG.perplexityModel,
     input,
-    tools: isSelfPost ? [] : [{ type: 'fetch_url' }],
+    tools: isSelfPost ? [] : [{ type: 'web_search' }],
     instructions,
     max_output_tokens: CONFIG.maxOutputTokens,
   };
 
-  const res = await fetch(CONFIG.perplexityApiUrl, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
+  const payloadJson = JSON.stringify(payload, null, 2);
+  console.log('[HN] Full Perplexity payload:\n', payloadJson);
+  console.log('[HN] Payload sizes — input:', input.length, 'chars | instructions:', instructions.length, 'chars | total JSON:', payloadJson.length, 'chars');
+  await chrome.storage.local.set({
+    lastPromptLog: {
+      ts: new Date().toISOString(),
+      isSelfPost,
+      inputLength: input.length,
+      instructionsLength: instructions.length,
+      payload,
     },
-    body: JSON.stringify(payload),
   });
+
+  const res = await fetchWithTimeout(
+    CONFIG.perplexityApiUrl,
+    {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: payloadJson,
+    },
+    CONFIG.perplexityTimeoutMs,
+    'Perplexity request'
+  );
 
   console.log('[HN] Perplexity response status:', res.status);
   if (!res.ok) {

@@ -7,6 +7,10 @@ const CONFIG = {
   maxCommentChars: 100000,
   maxOutputTokens: 4096,
 
+  // --- Timeouts (ms) ---
+  algoliaTimeoutMs: 15000,
+  perplexityTimeoutMs: 180000,
+
   // --- Prompts ---
 
   // Instructions sent to Perplexity for self-posts (Ask HN, Show HN, etc.)
@@ -15,9 +19,9 @@ const CONFIG = {
 
   // Instructions sent to Perplexity for link posts (article + comments)
   articleInstructions:
-    'Use fetch_url to retrieve the full article. Then search the web for outside reactions and related coverage. Produce three sections:\n\n'
+    'Use web_search to research the article (search by its title and URL) and gather outside reactions and related coverage from indexed content. Produce three sections:\n\n'
     + '## Article Summary\n'
-    + 'Cover the main argument, key points, notable data or anecdotes, and conclusions.\n\n'
+    + 'Cover the main argument, key points, notable data or anecdotes, and conclusions. Base this on what you can find via web search; if the article itself is not accessible (paywall, AI-blocking, etc.), say so and summarize what indexed snippets and discussions reveal about it.\n\n'
     + '## HN Comments Summary\n'
     + 'Focus on: dominant themes and opinions, notable debates or disagreements, insightful comments, corrections or additional context provided by commenters.\n\n'
     + '## Around the Web\n'
@@ -32,10 +36,10 @@ const CONFIG = {
   selfPostEmptyInput: 'This is an Ask HN / self-post with no comments yet.',
 
   // Input template for link posts with comments
-  articleWithCommentsInput: (articleUrl, commentsText) =>
-    `Fetch the article at this URL and summarize it: ${articleUrl}\n\nThen, separately summarize the Hacker News discussion below.\n\n--- HN COMMENTS ---\n\n${commentsText}`,
+  articleWithCommentsInput: (articleUrl, commentsText, title) =>
+    `Research and summarize this Hacker News post.\n\nArticle title: ${title || '(unknown)'}\nArticle URL: ${articleUrl}\n\nUse web_search to find the article and outside discussions of it. Then, separately summarize the Hacker News discussion below.\n\n--- HN COMMENTS ---\n\n${commentsText}`,
 
   // Input template for link posts without comments
-  articleOnlyInput: (articleUrl) =>
-    `Fetch and summarize the article at this URL: ${articleUrl}`,
+  articleOnlyInput: (articleUrl, title) =>
+    `Research and summarize this Hacker News article.\n\nArticle title: ${title || '(unknown)'}\nArticle URL: ${articleUrl}\n\nUse web_search to find the article and outside discussions of it.`,
 };

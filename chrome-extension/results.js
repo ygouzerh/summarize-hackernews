@@ -4,6 +4,24 @@ marked.setOptions({ breaks: true, gfm: true });
 
 chrome.runtime.sendMessage({ type: 'ready' });
 
+const startedAt = Date.now();
+const elapsedTimer = setInterval(updateElapsed, 1000);
+updateElapsed();
+
+function updateElapsed() {
+  const el = document.getElementById('elapsed');
+  if (!el) return;
+  const s = Math.floor((Date.now() - startedAt) / 1000);
+  const m = Math.floor(s / 60);
+  el.textContent = `${m}:${String(s % 60).padStart(2, '0')}`;
+}
+
+function stopElapsed() {
+  clearInterval(elapsedTimer);
+  const el = document.getElementById('elapsed');
+  if (el) el.classList.add('hidden');
+}
+
 chrome.runtime.onMessage.addListener(msg => {
   switch (msg.type) {
     case 'init':
@@ -31,12 +49,14 @@ function handleInit({ title, itemId }) {
 }
 
 function handleResult({ summary }) {
+  stopElapsed();
   const el = document.getElementById('summary-content');
   el.classList.remove('loading');
   el.innerHTML = marked.parse(summary || '*(No content)*');
 }
 
 function showError(message) {
+  stopElapsed();
   const banner = document.getElementById('error-banner');
   banner.classList.remove('hidden');
   banner.innerHTML = '';

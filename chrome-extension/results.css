@@ -98,6 +98,14 @@ main {
   font-style: italic;
 }
 
+.elapsed {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  font-style: normal;
+  color: #aaa;
+  font-size: 13px;
+}
+
 /* Markdown content styles */
 .content p { margin: 0.7em 0; }
 .content p:first-child { margin-top: 0; }
