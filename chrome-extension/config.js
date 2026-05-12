@@ -29,7 +29,11 @@ const CONFIG = {
 
   // Perplexity: detailed article research only.
   perplexityArticleInstructions:
-    'Use web_search to fetch and research the article (search by title and URL). Produce a *detailed* summary of the article only — main argument, key points, notable data or anecdotes, conclusions. If the article is paywalled or AI-blocked, say so and synthesize what indexed snippets and discussions reveal about it. Do not include HN comments analysis or outside-discussion bullets — those are handled separately. Use markdown.',
+    'Use web_search to fetch and research the article (search by title and URL). Structure the output as follows:\n\n'
+    + '1. **One-sentence TL;DR** — the core claim or finding in plain language.\n'
+    + '2. **Key points** — 4–6 bullet points covering the main argument, notable data, anecdotes, or sub-claims.\n'
+    + '3. **Bottom line** — 1–2 sentences on the conclusion or takeaway.\n\n'
+    + 'If the article is paywalled or AI-blocked, say so briefly and synthesize what indexed snippets reveal, using the same structure. Do not include HN comments or outside-discussion — those are handled separately.',
 
   perplexityArticleInput: (articleUrl, title) =>
     `Research and summarize this article in detail.\n\nArticle title: ${title || '(unknown)'}\nArticle URL: ${articleUrl}`,
@@ -45,7 +49,7 @@ const CONFIG = {
   anthropicSystemInstructions:
     'You merge a pre-researched article summary with a Hacker News discussion thread into a concise, well-structured markdown summary. Sections:\n\n'
     + '## Article Summary\n'
-    + 'Reproduce the supplied article research summary, lightly tightened for clarity. Omit this section entirely for self-posts (Ask HN / Show HN) where no article exists.\n\n'
+    + 'Reproduce the supplied article research summary, preserving its structure (TL;DR line, key-points bullets, bottom line). Tighten wording only. Omit this section entirely for self-posts (Ask HN / Show HN) where no article exists.\n\n'
     + '## HN Comments Summary\n'
     + 'Use ### sub-headers for each theme or debate (3–5 max). Under each sub-header, write 2–3 tight sentences — no bullet lists. Name specific commenters inline when they made a notable point (e.g. "ZrArm argued…"). Keep the whole section under 300 words. If comments are truncated, acknowledge it briefly. If there are no comments, say so in one sentence.\n\n'
     + 'Do not invent facts beyond the supplied inputs.',
