@@ -56,17 +56,21 @@ async function handleSummarize({ itemId, articleUrl, title }) {
       ? articleSummary.slice(0, CONFIG.maxArticleSummaryCharsForChunk)
       : null;
 
-    const chunkSummaries = threadChunks.length
+    const totalChunks = threadChunks.length;
+    const chunkSummaries = totalChunks
       ? await Promise.all(
-          threadChunks.map((chunkText, i) =>
-            fetchAnthropicChunkSummary({
-              chunkText,
-              briefArticleSummary,
-              title,
-              chunkIndex: i,
-              totalChunks: threadChunks.length,
-            }, anthropicKey),
-          ),
+          threadChunks.map(async (chunkText, i) => {
+            const startMs = Date.now();
+            sendToTab(tabId, { type: 'chunk-start', chunkIndex: i, totalChunks });
+            try {
+              const result = await fetchAnthropicChunkSummary({ chunkText, briefArticleSummary, title, chunkIndex: i, totalChunks }, anthropicKey);
+              sendToTab(tabId, { type: 'chunk-done', chunkIndex: i, totalChunks, elapsedMs: Date.now() - startMs, success: true });
+              return result;
+            } catch (err) {
+              sendToTab(tabId, { type: 'chunk-done', chunkIndex: i, totalChunks, elapsedMs: Date.now() - startMs, success: false });
+              throw err;
+            }
+          }),
         )
       : [];
 
