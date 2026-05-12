@@ -42,15 +42,36 @@ async function handleSummarize({ itemId, articleUrl, title }) {
   }
 
   try {
-    const [commentsText, articleSummary] = await Promise.all([
+    const [algoliaData, articleSummary] = await Promise.all([
       fetchAlgoliaComments(itemId),
       isSelfPost
         ? Promise.resolve(null)
         : fetchPerplexityArticleSummary({ articleUrl, title }, perplexityKey),
     ]);
 
+    const threadChunks = splitIntoThreadChunks(algoliaData, CONFIG.commentChunks);
+    console.log('[HN] Split into', threadChunks.length, 'thread chunks');
+
+    const briefArticleSummary = articleSummary
+      ? articleSummary.slice(0, CONFIG.maxArticleSummaryCharsForChunk)
+      : null;
+
+    const chunkSummaries = threadChunks.length
+      ? await Promise.all(
+          threadChunks.map((chunkText, i) =>
+            fetchAnthropicChunkSummary({
+              chunkText,
+              briefArticleSummary,
+              title,
+              chunkIndex: i,
+              totalChunks: threadChunks.length,
+            }, anthropicKey),
+          ),
+        )
+      : [];
+
     const summary = await fetchAnthropicSynthesis(
-      { articleSummary, commentsText, title, isSelfPost },
+      { articleSummary, chunkSummaries, title, isSelfPost },
       anthropicKey,
     );
     await sendToTab(tabId, { type: 'result', summary });
@@ -85,18 +106,64 @@ async function fetchAlgoliaComments(itemId) {
   );
   console.log('[HN] Algolia response status:', res.status);
   if (!res.ok) throw new Error(`Algolia API ${res.status}`);
-  const data = await res.json();
+  return res.json();
+}
 
-  const flat = flattenComments(data);
-  if (!flat.trim()) {
-    console.log('[HN] No comments found');
-    return null;
+function splitIntoThreadChunks(data, n) {
+  const topLevel = (data.children || []).filter(c => c.author && c.text);
+  if (!topLevel.length) return [];
+
+  const chunks = Array.from({ length: n }, () => []);
+  topLevel.forEach((thread, i) => chunks[i % n].push(thread));
+
+  return chunks
+    .filter(c => c.length > 0)
+    .map(threads => {
+      const flat = threads.map(t => flattenComments(t)).join('');
+      const maxPerChunk = Math.floor(CONFIG.maxCommentChars / n);
+      return flat.length > maxPerChunk
+        ? flat.slice(0, maxPerChunk) + '\n\n*(truncated)*'
+        : flat;
+    })
+    .filter(text => text.trim());
+}
+
+async function fetchAnthropicChunkSummary({ chunkText, briefArticleSummary, title, chunkIndex, totalChunks }, apiKey) {
+  const userContent = CONFIG.anthropicChunkInput({ chunkText, briefArticleSummary, title, chunkIndex, totalChunks });
+  const payload = {
+    model: CONFIG.anthropicModel,
+    max_tokens: CONFIG.anthropicChunkMaxTokens,
+    system: CONFIG.anthropicChunkSystemInstructions,
+    messages: [{ role: 'user', content: userContent }],
+  };
+
+  console.log(`[HN] Anthropic chunk ${chunkIndex + 1}/${totalChunks} — content: ${userContent.length} chars`);
+
+  const res = await fetchWithTimeout(
+    CONFIG.anthropicApiUrl,
+    {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    },
+    CONFIG.anthropicTimeoutMs,
+    `Anthropic chunk ${chunkIndex + 1}`,
+  );
+
+  if (!res.ok) {
+    const text = await res.text();
+    let detail = text.slice(0, 300);
+    try { detail = JSON.parse(text).error?.message || detail; } catch { /* not JSON */ }
+    throw new Error(`Anthropic chunk ${chunkIndex + 1} error ${res.status}: ${detail}`);
   }
 
-  console.log('[HN] Comments fetched, length:', flat.length);
-  return flat.length > CONFIG.maxCommentChars
-    ? flat.slice(0, CONFIG.maxCommentChars) + '\n\n*(comments truncated due to length)*'
-    : flat;
+  const data = await res.json();
+  return (data.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n\n') || '';
 }
 
 async function callPerplexity({ input, instructions, maxOutputTokens, timeoutMs, label, logKey }, apiKey) {
@@ -179,8 +246,8 @@ function fetchPerplexityAroundTheWeb({ articleUrl, title }, apiKey) {
   }, apiKey);
 }
 
-async function fetchAnthropicSynthesis({ articleSummary, commentsText, title, isSelfPost }, apiKey) {
-  const userContent = CONFIG.anthropicSynthesisInput({ articleSummary, commentsText, title, isSelfPost });
+async function fetchAnthropicSynthesis({ articleSummary, chunkSummaries, title, isSelfPost }, apiKey) {
+  const userContent = CONFIG.anthropicSynthesisInput({ articleSummary, chunkSummaries, title, isSelfPost });
   const payload = {
     model: CONFIG.anthropicModel,
     max_tokens: CONFIG.anthropicMaxTokens,
@@ -189,7 +256,7 @@ async function fetchAnthropicSynthesis({ articleSummary, commentsText, title, is
   };
 
   const payloadJson = JSON.stringify(payload, null, 2);
-  console.log('[HN] Anthropic synthesis — user content:', userContent.length, 'chars | system:', CONFIG.anthropicSystemInstructions.length, 'chars | total JSON:', payloadJson.length, 'chars');
+  console.log('[HN] Anthropic synthesis — user content:', userContent.length, 'chars | chunks:', chunkSummaries?.length ?? 0, '| total JSON:', payloadJson.length, 'chars');
   await chrome.storage.local.set({
     lastPromptLog_anthropic: {
       ts: new Date().toISOString(),

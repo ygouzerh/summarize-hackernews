@@ -7,14 +7,17 @@ const CONFIG = {
   perplexityArticleMaxOutputTokens: 2048,
   perplexityAroundWebMaxOutputTokens: 1024,
 
-  // --- Anthropic (final synthesis) ---
+  // --- Anthropic (chunk summaries + final synthesis) ---
   anthropicApiUrl: 'https://api.anthropic.com/v1/messages',
   anthropicModel: 'claude-sonnet-4-6',
-  anthropicMaxTokens: 4096,
+  anthropicMaxTokens: 4096,        // final synthesis
+  anthropicChunkMaxTokens: 1024,   // per-chunk comment summarization
 
   // --- Algolia (HN comments) ---
   algoliaApiUrl: 'https://hn.algolia.com/api/v1/items/',
   maxCommentChars: 100000,
+  commentChunks: 5,                          // number of parallel chunk calls
+  maxArticleSummaryCharsForChunk: 500,       // brief article context sent with each chunk
 
   // --- Timeouts (ms) ---
   algoliaTimeoutMs: 15000,
@@ -47,16 +50,29 @@ const CONFIG = {
     + 'Focus on: dominant themes and opinions, notable debates or disagreements, insightful comments, corrections or additional context provided by commenters. If comments are truncated, acknowledge it. If there are no comments, say so briefly.\n\n'
     + 'Be concise but comprehensive. Use markdown headers, bullet lists where helpful. Do not invent facts beyond the supplied inputs.',
 
-  anthropicSynthesisInput: ({ articleSummary, commentsText, title, isSelfPost }) => {
+  anthropicSynthesisInput: ({ articleSummary, chunkSummaries, title, isSelfPost }) => {
     const header = `Hacker News post title: ${title || '(unknown)'}\n`;
     const article = isSelfPost
       ? '(This is a self-post — no external article.)'
       : (articleSummary
         ? `--- ARTICLE RESEARCH SUMMARY ---\n\n${articleSummary}`
         : '(No article research summary available.)');
-    const comments = commentsText
-      ? `--- HN COMMENTS (raw, threaded) ---\n\n${commentsText}`
+    const comments = chunkSummaries && chunkSummaries.length
+      ? `--- HN COMMENTS (pre-summarized in ${chunkSummaries.length} groups) ---\n\n`
+        + chunkSummaries.map((s, i) => `### Thread Group ${i + 1} of ${chunkSummaries.length}\n${s}`).join('\n\n')
       : '(No comments yet on this post.)';
     return `${header}\n${article}\n\n${comments}`;
+  },
+
+  // Anthropic: per-chunk comment summarization.
+  anthropicChunkSystemInstructions:
+    'You summarize a subset of Hacker News comment threads. Focus on: dominant themes and opinions in this group, notable debates or disagreements, insightful or highly-upvoted-style comments, factual corrections or extra context from commenters. Be concise. Use bullet points. Do not invent facts.',
+
+  anthropicChunkInput: ({ chunkText, briefArticleSummary, title, chunkIndex, totalChunks }) => {
+    const header = `HN post: ${title || '(unknown)'} — comment group ${chunkIndex + 1} of ${totalChunks}\n`;
+    const context = briefArticleSummary
+      ? `Article context: ${briefArticleSummary}\n\n`
+      : '';
+    return `${header}${context}--- COMMENT THREADS ---\n\n${chunkText}`;
   },
 };
