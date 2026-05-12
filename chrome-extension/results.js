@@ -4,8 +4,10 @@ marked.setOptions({ breaks: true, gfm: true });
 
 chrome.runtime.sendMessage({ type: 'ready' });
 
+const pageStartedAt = Date.now();
 const phaseStartTimes = {};
 const phaseIntervals = {};
+const phaseMeta = {};  // phase -> { label, elapsedMs }
 
 function formatMs(ms) {
   const s = Math.floor(ms / 1000);
@@ -31,6 +33,7 @@ function handlePhaseStart({ phase, label }) {
   row.querySelector('.phase-status').innerHTML = '<div class="spinner"></div>';
   row.className = 'phase-row phase-running';
   phaseStartTimes[phase] = Date.now();
+  phaseMeta[phase] = { label: label || phase, elapsedMs: null };
   phaseIntervals[phase] = setInterval(() => {
     const timeEl = row.querySelector('.phase-time');
     if (timeEl) timeEl.textContent = formatMs(Date.now() - phaseStartTimes[phase]);
@@ -44,6 +47,7 @@ function handlePhaseDone({ phase, elapsedMs }) {
   row.className = 'phase-row phase-done';
   row.querySelector('.phase-status').textContent = '✓';
   row.querySelector('.phase-time').textContent = formatMs(elapsedMs);
+  if (phaseMeta[phase]) phaseMeta[phase].elapsedMs = elapsedMs;
 }
 
 function handleInit({ title, itemId, isSelfPost }) {
@@ -61,11 +65,33 @@ function handleInit({ title, itemId, isSelfPost }) {
   }
 }
 
-function handleResult({ summary }) {
+function handleResult({ summary, synthesisElapsedMs }) {
+  if (synthesisElapsedMs != null && phaseMeta.synthesis) {
+    phaseMeta.synthesis.elapsedMs = synthesisElapsedMs;
+  }
   Object.values(phaseIntervals).forEach(clearInterval);
   const el = document.getElementById('summary-content');
   el.classList.remove('loading');
   el.innerHTML = marked.parse(summary || '*(No content)*');
+  populateTimings();
+}
+
+function populateTimings() {
+  const content = document.getElementById('timing-content');
+  const section = document.getElementById('timing-section');
+  if (!content || !section) return;
+
+  const phaseOrder = ['research', 'chunks', 'synthesis'];
+  const rows = phaseOrder
+    .filter(p => phaseMeta[p]?.elapsedMs != null)
+    .map(p => `<div class="timing-row"><span>${phaseMeta[p].label}</span><span>${formatMs(phaseMeta[p].elapsedMs)}</span></div>`)
+    .join('');
+
+  const totalMs = Date.now() - pageStartedAt;
+  content.innerHTML = rows
+    + `<div class="timing-row timing-total"><span>Total</span><span>${formatMs(totalMs)}</span></div>`;
+
+  section.classList.remove('hidden');
 }
 
 function handleAroundTheWeb({ text }) {
