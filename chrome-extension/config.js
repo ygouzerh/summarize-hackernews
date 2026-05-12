@@ -36,7 +36,7 @@ const CONFIG = {
 
   // Perplexity: standalone "Around the Web" call.
   perplexityAroundWebInstructions:
-    'Use web_search to find what others are saying about this article or topic *outside* Hacker News: discussions on other forums (Reddit, Lobsters, Twitter/X, Mastodon), blog responses, expert takes, related reporting, follow-ups, notable rebuttals. Return a markdown bulleted list (max 5 bullets) with sources linked inline. If the article makes specific factual claims, briefly note whether other sources corroborate or contradict them. If you find nothing substantive, return exactly the string: *(no notable outside discussion found)*',
+    'Use web_search to find what others are saying about this article or topic *outside* Hacker News: discussions on other forums (Reddit, Lobsters, Twitter/X, Mastodon), blog responses, expert takes, related reporting, follow-ups, notable rebuttals. Structure the output with 2–3 short markdown sections using bold labels (e.g. **General consensus**, **Counterpoints**, **Notable coverage**) — only include a section if you have something to say. Each section is 1–3 sentences with source names woven in inline. Do not use bullet lists. If you find nothing substantive, return exactly the string: *(no notable outside discussion found)*',
 
   perplexityAroundWebInput: (articleUrl, title) =>
     `Find outside-of-HN reactions to this article.\n\nArticle title: ${title || '(unknown)'}\nArticle URL: ${articleUrl}`,
@@ -47,8 +47,8 @@ const CONFIG = {
     + '## Article Summary\n'
     + 'Reproduce the supplied article research summary, lightly tightened for clarity. Omit this section entirely for self-posts (Ask HN / Show HN) where no article exists.\n\n'
     + '## HN Comments Summary\n'
-    + 'Focus on: dominant themes and opinions, notable debates or disagreements, insightful comments, corrections or additional context provided by commenters. If comments are truncated, acknowledge it. If there are no comments, say so briefly.\n\n'
-    + 'Be concise but comprehensive. Use markdown headers, bullet lists where helpful. Do not invent facts beyond the supplied inputs.',
+    + 'Use ### sub-headers for each theme or debate (3–5 max). Under each sub-header, write 2–3 tight sentences — no bullet lists. Name specific commenters inline when they made a notable point (e.g. "ZrArm argued…"). Keep the whole section under 300 words. If comments are truncated, acknowledge it briefly. If there are no comments, say so in one sentence.\n\n'
+    + 'Do not invent facts beyond the supplied inputs.',
 
   anthropicSynthesisInput: ({ articleSummary, chunkSummaries, title, isSelfPost }) => {
     const header = `Hacker News post title: ${title || '(unknown)'}\n`;
@@ -66,7 +66,7 @@ const CONFIG = {
 
   // Anthropic: per-chunk comment summarization.
   anthropicChunkSystemInstructions:
-    'You summarize a subset of Hacker News comment threads. Focus on: dominant themes and opinions in this group, notable debates or disagreements, insightful or highly-upvoted-style comments, factual corrections or extra context from commenters. Be concise. Use bullet points. Do not invent facts.',
+    'You summarize a subset of Hacker News comment threads. Extract the key points only: dominant themes, notable debates, standout individual comments (name the commenter), factual corrections. Be tight — aim for 5–8 bullets max. Do not invent facts.',
 
   anthropicChunkInput: ({ chunkText, briefArticleSummary, title, chunkIndex, totalChunks }) => {
     const header = `HN post: ${title || '(unknown)'} — comment group ${chunkIndex + 1} of ${totalChunks}\n`;

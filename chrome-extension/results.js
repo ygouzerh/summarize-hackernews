@@ -4,91 +4,46 @@ marked.setOptions({ breaks: true, gfm: true });
 
 chrome.runtime.sendMessage({ type: 'ready' });
 
-const startedAt = Date.now();
-const elapsedTimer = setInterval(updateElapsed, 1000);
-updateElapsed();
-
-function updateElapsed() {
-  const el = document.getElementById('elapsed');
-  if (!el) return;
-  const s = Math.floor((Date.now() - startedAt) / 1000);
-  const m = Math.floor(s / 60);
-  el.textContent = `${m}:${String(s % 60).padStart(2, '0')}`;
-}
-
-function stopElapsed() {
-  clearInterval(elapsedTimer);
-}
-
-chrome.runtime.onMessage.addListener(msg => {
-  switch (msg.type) {
-    case 'init':              handleInit(msg); break;
-    case 'result':            handleResult(msg); break;
-    case 'around-the-web':   handleAroundTheWeb(msg); break;
-    case 'around-the-web-error': handleAroundTheWebError(msg); break;
-    case 'error':             showError(msg.message); break;
-    case 'chunk-start':       handleChunkStart(msg); break;
-    case 'chunk-done':        handleChunkDone(msg); break;
-  }
-});
-
-const chunkStartTimes = {};
-const chunkDoneInfo = {};
-let chunkTickInterval = null;
+const phaseStartTimes = {};
+const phaseIntervals = {};
 
 function formatMs(ms) {
   const s = Math.floor(ms / 1000);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-function ensureChunkGrid(totalChunks) {
-  const container = document.getElementById('chunk-status');
-  if (!container.classList.contains('hidden')) return;
-  container.classList.remove('hidden');
-  for (let i = 0; i < totalChunks; i++) {
-    const pill = document.createElement('div');
-    pill.id = `chunk-pill-${i}`;
-    pill.className = 'chunk-pill';
-    pill.innerHTML = `<span class="chunk-num">${i + 1}</span><span class="chunk-icon">○</span><span class="chunk-time">—</span>`;
-    container.appendChild(pill);
+chrome.runtime.onMessage.addListener(msg => {
+  switch (msg.type) {
+    case 'init':                 handleInit(msg); break;
+    case 'result':               handleResult(msg); break;
+    case 'around-the-web':       handleAroundTheWeb(msg); break;
+    case 'around-the-web-error': handleAroundTheWebError(msg); break;
+    case 'error':                showError(msg.message); break;
+    case 'phase-start':          handlePhaseStart(msg); break;
+    case 'phase-done':           handlePhaseDone(msg); break;
   }
+});
+
+function handlePhaseStart({ phase, label }) {
+  const row = document.getElementById(`phase-${phase}`);
+  if (!row) return;
+  if (label) row.querySelector('.phase-label').textContent = label;
+  row.querySelector('.phase-status').innerHTML = '<div class="spinner"></div>';
+  row.className = 'phase-row phase-running';
+  phaseStartTimes[phase] = Date.now();
+  phaseIntervals[phase] = setInterval(() => {
+    const timeEl = row.querySelector('.phase-time');
+    if (timeEl) timeEl.textContent = formatMs(Date.now() - phaseStartTimes[phase]);
+  }, 500);
 }
 
-function renderChunkPill(i) {
-  const pill = document.getElementById(`chunk-pill-${i}`);
-  if (!pill) return;
-  const done = chunkDoneInfo[i];
-  if (done) {
-    pill.className = `chunk-pill ${done.success ? 'chunk-done' : 'chunk-error'}`;
-    pill.querySelector('.chunk-icon').textContent = done.success ? '✓' : '✗';
-    pill.querySelector('.chunk-time').textContent = formatMs(done.elapsedMs);
-  } else if (chunkStartTimes[i]) {
-    pill.className = 'chunk-pill chunk-running';
-    pill.querySelector('.chunk-icon').textContent = '⟳';
-    pill.querySelector('.chunk-time').textContent = formatMs(Date.now() - chunkStartTimes[i]);
-  }
-}
-
-function handleChunkStart({ chunkIndex, totalChunks }) {
-  chunkStartTimes[chunkIndex] = Date.now();
-  ensureChunkGrid(totalChunks);
-  renderChunkPill(chunkIndex);
-  if (!chunkTickInterval) {
-    chunkTickInterval = setInterval(() => {
-      Object.keys(chunkStartTimes).forEach(i => {
-        if (!chunkDoneInfo[i]) renderChunkPill(Number(i));
-      });
-    }, 500);
-  }
-}
-
-function handleChunkDone({ chunkIndex, totalChunks, elapsedMs, success }) {
-  chunkDoneInfo[chunkIndex] = { elapsedMs, success };
-  renderChunkPill(chunkIndex);
-  if (Object.keys(chunkDoneInfo).length === totalChunks) {
-    clearInterval(chunkTickInterval);
-    chunkTickInterval = null;
-  }
+function handlePhaseDone({ phase, elapsedMs }) {
+  clearInterval(phaseIntervals[phase]);
+  const row = document.getElementById(`phase-${phase}`);
+  if (!row) return;
+  row.className = 'phase-row phase-done';
+  row.querySelector('.phase-status').textContent = '✓';
+  row.querySelector('.phase-time').textContent = formatMs(elapsedMs);
 }
 
 function handleInit({ title, itemId, isSelfPost }) {
@@ -107,14 +62,10 @@ function handleInit({ title, itemId, isSelfPost }) {
 }
 
 function handleResult({ summary }) {
-  stopElapsed();
-  const totalMs = Date.now() - startedAt;
-  const s = Math.floor(totalMs / 1000);
-  const totalStr = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  Object.values(phaseIntervals).forEach(clearInterval);
   const el = document.getElementById('summary-content');
   el.classList.remove('loading');
-  el.innerHTML = marked.parse(summary || '*(No content)*')
-    + `<p class="total-time">Generated in ${totalStr}</p>`;
+  el.innerHTML = marked.parse(summary || '*(No content)*');
 }
 
 function handleAroundTheWeb({ text }) {
@@ -140,7 +91,7 @@ function escapeHtml(s) {
 }
 
 function showError(message) {
-  stopElapsed();
+  Object.values(phaseIntervals).forEach(clearInterval);
   const banner = document.getElementById('error-banner');
   banner.classList.remove('hidden');
   banner.innerHTML = '';

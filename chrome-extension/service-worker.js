@@ -42,12 +42,15 @@ async function handleSummarize({ itemId, articleUrl, title }) {
   }
 
   try {
+    const phase1Start = Date.now();
+    sendToTab(tabId, { type: 'phase-start', phase: 'research', label: isSelfPost ? 'Fetching comments' : 'Researching article' });
     const [algoliaData, articleSummary] = await Promise.all([
       fetchAlgoliaComments(itemId),
       isSelfPost
         ? Promise.resolve(null)
         : fetchPerplexityArticleSummary({ articleUrl, title }, perplexityKey),
     ]);
+    sendToTab(tabId, { type: 'phase-done', phase: 'research', elapsedMs: Date.now() - phase1Start });
 
     const threadChunks = splitIntoThreadChunks(algoliaData, CONFIG.commentChunks);
     console.log('[HN] Split into', threadChunks.length, 'thread chunks');
@@ -56,29 +59,25 @@ async function handleSummarize({ itemId, articleUrl, title }) {
       ? articleSummary.slice(0, CONFIG.maxArticleSummaryCharsForChunk)
       : null;
 
+    const phase2Start = Date.now();
+    sendToTab(tabId, { type: 'phase-start', phase: 'chunks', label: 'Summarizing comments' });
     const totalChunks = threadChunks.length;
     const chunkSummaries = totalChunks
       ? await Promise.all(
-          threadChunks.map(async (chunkText, i) => {
-            const startMs = Date.now();
-            sendToTab(tabId, { type: 'chunk-start', chunkIndex: i, totalChunks });
-            try {
-              const result = await fetchAnthropicChunkSummary({ chunkText, briefArticleSummary, title, chunkIndex: i, totalChunks }, anthropicKey);
-              sendToTab(tabId, { type: 'chunk-done', chunkIndex: i, totalChunks, elapsedMs: Date.now() - startMs, success: true });
-              return result;
-            } catch (err) {
-              sendToTab(tabId, { type: 'chunk-done', chunkIndex: i, totalChunks, elapsedMs: Date.now() - startMs, success: false });
-              throw err;
-            }
-          }),
+          threadChunks.map((chunkText, i) =>
+            fetchAnthropicChunkSummary({ chunkText, briefArticleSummary, title, chunkIndex: i, totalChunks }, anthropicKey),
+          ),
         )
       : [];
+    sendToTab(tabId, { type: 'phase-done', phase: 'chunks', elapsedMs: Date.now() - phase2Start });
 
+    const phase3Start = Date.now();
+    sendToTab(tabId, { type: 'phase-start', phase: 'synthesis', label: 'Generating final summary' });
     const summary = await fetchAnthropicSynthesis(
       { articleSummary, chunkSummaries, title, isSelfPost },
       anthropicKey,
     );
-    await sendToTab(tabId, { type: 'result', summary });
+    await sendToTab(tabId, { type: 'result', summary, synthesisElapsedMs: Date.now() - phase3Start });
   } catch (err) {
     console.error('[HN] Error:', err);
     await sendToTab(tabId, { type: 'error', message: err.message });

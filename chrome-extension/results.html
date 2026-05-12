@@ -22,12 +22,23 @@
       <div id="error-banner" class="error-banner hidden"></div>
 
       <div id="summary-content" class="content loading">
-        <div class="loading-header">
-          <div class="spinner"></div>
-          <span>Researching article and summarizing comments…</span>
-          <span id="elapsed" class="elapsed">0:00</span>
+        <div id="phase-list">
+          <div id="phase-research" class="phase-row phase-pending">
+            <span class="phase-status">·</span>
+            <span class="phase-label">Researching article</span>
+            <span class="phase-time"></span>
+          </div>
+          <div id="phase-chunks" class="phase-row phase-pending">
+            <span class="phase-status">·</span>
+            <span class="phase-label">Summarizing comments</span>
+            <span class="phase-time"></span>
+          </div>
+          <div id="phase-synthesis" class="phase-row phase-pending">
+            <span class="phase-status">·</span>
+            <span class="phase-label">Generating final summary</span>
+            <span class="phase-time"></span>
+          </div>
         </div>
-        <div id="chunk-status" class="chunk-status hidden"></div>
       </div>
 
       <section id="around-the-web" class="around-the-web hidden">
