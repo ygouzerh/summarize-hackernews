@@ -30,13 +30,19 @@ chrome.runtime.onMessage.addListener(msg => {
     case 'result':
       handleResult(msg);
       break;
+    case 'around-the-web':
+      handleAroundTheWeb(msg);
+      break;
+    case 'around-the-web-error':
+      handleAroundTheWebError(msg);
+      break;
     case 'error':
       showError(msg.message);
       break;
   }
 });
 
-function handleInit({ title, itemId }) {
+function handleInit({ title, itemId, isSelfPost }) {
   if (title) {
     document.getElementById('post-title').textContent = title;
     document.title = `HN: ${title}`;
@@ -46,6 +52,9 @@ function handleInit({ title, itemId }) {
     link.href = `https://news.ycombinator.com/item?id=${itemId}`;
     link.classList.remove('hidden');
   }
+  if (!isSelfPost) {
+    document.getElementById('around-the-web').classList.remove('hidden');
+  }
 }
 
 function handleResult({ summary }) {
@@ -53,6 +62,28 @@ function handleResult({ summary }) {
   const el = document.getElementById('summary-content');
   el.classList.remove('loading');
   el.innerHTML = marked.parse(summary || '*(No content)*');
+}
+
+function handleAroundTheWeb({ text }) {
+  const section = document.getElementById('around-the-web');
+  const el = document.getElementById('around-the-web-content');
+  section.classList.remove('hidden');
+  el.classList.remove('loading');
+  el.innerHTML = marked.parse(text || '*(no notable outside discussion found)*');
+}
+
+function handleAroundTheWebError({ message }) {
+  const el = document.getElementById('around-the-web-content');
+  el.classList.remove('loading');
+  el.innerHTML = `<em>Could not load outside reactions: ${escapeHtml(message)}</em>`;
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function showError(message) {

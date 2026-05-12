@@ -1,5 +1,6 @@
-// Service worker: fetch HN comments via Algolia, then one Perplexity call for everything
-// Config is loaded via importScripts (see manifest)
+// Service worker: Algolia (comments) + Perplexity (article research) → Anthropic (final synthesis).
+// A separate Perplexity "Around the Web" call runs in the background and streams its result to
+// the results tab independently — it never blocks the main summary.
 
 importScripts('config.js');
 
@@ -10,28 +11,48 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 async function handleSummarize({ itemId, articleUrl, title }) {
-  // Open results tab immediately
   const tab = await chrome.tabs.create({ url: chrome.runtime.getURL('results.html') });
   const tabId = tab.id;
   console.log('[HN] Results tab opened, waiting for ready signal...');
 
   await waitForResultsReady(tabId);
-  console.log('[HN] Results page ready. Sending init...');
-  await sendToTab(tabId, { type: 'init', title, itemId, articleUrl });
+  const isSelfPost = !articleUrl || articleUrl.startsWith('https://news.ycombinator.com');
+  console.log('[HN] Results page ready. Sending init... isSelfPost:', isSelfPost);
+  await sendToTab(tabId, { type: 'init', title, itemId, articleUrl, isSelfPost });
 
-  const { perplexityKey } = await chrome.storage.sync.get(['perplexityKey']);
-  if (!perplexityKey) {
+  const { perplexityKey, anthropicKey } = await chrome.storage.sync.get(['perplexityKey', 'anthropicKey']);
+  if (!anthropicKey) {
+    await sendToTab(tabId, { type: 'error', message: 'Anthropic API key not set. Click the extension icon to configure it.' });
+    return;
+  }
+  if (!isSelfPost && !perplexityKey) {
     await sendToTab(tabId, { type: 'error', message: 'Perplexity API key not set. Click the extension icon to configure it.' });
     return;
   }
-  console.log('[HN] API key found. Starting Algolia + Perplexity calls...');
+  console.log('[HN] Keys present. Starting pipeline...');
+
+  // Fire "Around the Web" in the background — does NOT block the main pipeline.
+  if (!isSelfPost) {
+    fetchPerplexityAroundTheWeb({ articleUrl, title }, perplexityKey)
+      .then(text => sendToTab(tabId, { type: 'around-the-web', text }))
+      .catch(err => {
+        console.error('[HN] Around-the-Web error:', err);
+        sendToTab(tabId, { type: 'around-the-web-error', message: err.message });
+      });
+  }
 
   try {
-    // Fetch comments from Algolia (fast, no AI needed)
-    const commentsText = await fetchAlgoliaComments(itemId);
+    const [commentsText, articleSummary] = await Promise.all([
+      fetchAlgoliaComments(itemId),
+      isSelfPost
+        ? Promise.resolve(null)
+        : fetchPerplexityArticleSummary({ articleUrl, title }, perplexityKey),
+    ]);
 
-    // One Perplexity call: research article via web_search + summarize both
-    const summary = await fetchCombinedSummary(articleUrl, commentsText, perplexityKey, title);
+    const summary = await fetchAnthropicSynthesis(
+      { articleSummary, commentsText, title, isSelfPost },
+      anthropicKey,
+    );
     await sendToTab(tabId, { type: 'result', summary });
   } catch (err) {
     console.error('[HN] Error:', err);
@@ -60,7 +81,7 @@ async function fetchAlgoliaComments(itemId) {
     CONFIG.algoliaApiUrl + itemId,
     {},
     CONFIG.algoliaTimeoutMs,
-    'Algolia comments fetch'
+    'Algolia comments fetch',
   );
   console.log('[HN] Algolia response status:', res.status);
   if (!res.ok) throw new Error(`Algolia API ${res.status}`);
@@ -78,42 +99,20 @@ async function fetchAlgoliaComments(itemId) {
     : flat;
 }
 
-async function fetchCombinedSummary(articleUrl, commentsText, apiKey, title) {
-  const isSelfPost = !articleUrl || articleUrl.startsWith('https://news.ycombinator.com');
-  console.log('[HN] Calling Perplexity API. isSelfPost:', isSelfPost, 'articleUrl:', articleUrl);
-
-  let input;
-  if (isSelfPost) {
-    input = commentsText
-      ? CONFIG.selfPostInput(commentsText)
-      : CONFIG.selfPostEmptyInput;
-  } else {
-    input = commentsText
-      ? CONFIG.articleWithCommentsInput(articleUrl, commentsText, title)
-      : CONFIG.articleOnlyInput(articleUrl, title);
-  }
-
-  const instructions = isSelfPost
-    ? CONFIG.selfPostInstructions
-    : CONFIG.articleInstructions;
-
+async function callPerplexity({ input, instructions, maxOutputTokens, timeoutMs, label, logKey }, apiKey) {
   const payload = {
     model: CONFIG.perplexityModel,
     input,
-    tools: isSelfPost ? [] : [{ type: 'web_search' }],
+    tools: [{ type: 'web_search' }],
     instructions,
-    max_output_tokens: CONFIG.maxOutputTokens,
+    max_output_tokens: maxOutputTokens,
   };
 
   const payloadJson = JSON.stringify(payload, null, 2);
-  console.log('[HN] Full Perplexity payload:\n', payloadJson);
-  console.log('[HN] Payload sizes — input:', input.length, 'chars | instructions:', instructions.length, 'chars | total JSON:', payloadJson.length, 'chars');
+  console.log(`[HN] Perplexity (${label}) — input:`, input.length, 'chars | instructions:', instructions.length, 'chars | total JSON:', payloadJson.length, 'chars');
   await chrome.storage.local.set({
-    lastPromptLog: {
+    [`lastPromptLog_${logKey}`]: {
       ts: new Date().toISOString(),
-      isSelfPost,
-      inputLength: input.length,
-      instructionsLength: instructions.length,
       payload,
     },
   });
@@ -128,27 +127,23 @@ async function fetchCombinedSummary(articleUrl, commentsText, apiKey, title) {
       },
       body: payloadJson,
     },
-    CONFIG.perplexityTimeoutMs,
-    'Perplexity request'
+    timeoutMs,
+    label,
   );
 
-  console.log('[HN] Perplexity response status:', res.status);
+  console.log(`[HN] Perplexity (${label}) response status:`, res.status);
   if (!res.ok) {
     const text = await res.text();
-    const headers = Object.fromEntries(res.headers.entries());
-    console.error('[HN] Perplexity error:', {
+    console.error(`[HN] Perplexity (${label}) error:`, {
       status: res.status,
       statusText: res.statusText,
-      headers,
       body: text.slice(0, 2000),
-      model: CONFIG.perplexityModel,
-      url: CONFIG.perplexityApiUrl,
     });
     let detail = text.slice(0, 300);
     try {
       const parsed = JSON.parse(text);
       detail = parsed.error?.message || parsed.detail || parsed.message || detail;
-    } catch { /* not JSON, use raw text */ }
+    } catch { /* not JSON */ }
     throw new Error(`Perplexity API error ${res.status} (${res.statusText}): ${detail}`);
   }
 
@@ -158,8 +153,90 @@ async function fetchCombinedSummary(articleUrl, commentsText, apiKey, title) {
     .flatMap(o => (o.content || []).map(c => c.text))
     .filter(Boolean);
 
-  console.log('[HN] Perplexity returned', texts.length, 'message segments');
-  return texts.join('\n\n') || '*(Perplexity returned no content)*';
+  console.log(`[HN] Perplexity (${label}) returned`, texts.length, 'message segments');
+  return texts.join('\n\n') || '';
+}
+
+function fetchPerplexityArticleSummary({ articleUrl, title }, apiKey) {
+  return callPerplexity({
+    input: CONFIG.perplexityArticleInput(articleUrl, title),
+    instructions: CONFIG.perplexityArticleInstructions,
+    maxOutputTokens: CONFIG.perplexityArticleMaxOutputTokens,
+    timeoutMs: CONFIG.perplexityTimeoutMs,
+    label: 'article research',
+    logKey: 'perplexity_article',
+  }, apiKey);
+}
+
+function fetchPerplexityAroundTheWeb({ articleUrl, title }, apiKey) {
+  return callPerplexity({
+    input: CONFIG.perplexityAroundWebInput(articleUrl, title),
+    instructions: CONFIG.perplexityAroundWebInstructions,
+    maxOutputTokens: CONFIG.perplexityAroundWebMaxOutputTokens,
+    timeoutMs: CONFIG.perplexityAroundWebTimeoutMs,
+    label: 'around the web',
+    logKey: 'perplexity_around_web',
+  }, apiKey);
+}
+
+async function fetchAnthropicSynthesis({ articleSummary, commentsText, title, isSelfPost }, apiKey) {
+  const userContent = CONFIG.anthropicSynthesisInput({ articleSummary, commentsText, title, isSelfPost });
+  const payload = {
+    model: CONFIG.anthropicModel,
+    max_tokens: CONFIG.anthropicMaxTokens,
+    system: CONFIG.anthropicSystemInstructions,
+    messages: [{ role: 'user', content: userContent }],
+  };
+
+  const payloadJson = JSON.stringify(payload, null, 2);
+  console.log('[HN] Anthropic synthesis — user content:', userContent.length, 'chars | system:', CONFIG.anthropicSystemInstructions.length, 'chars | total JSON:', payloadJson.length, 'chars');
+  await chrome.storage.local.set({
+    lastPromptLog_anthropic: {
+      ts: new Date().toISOString(),
+      payload,
+    },
+  });
+
+  const res = await fetchWithTimeout(
+    CONFIG.anthropicApiUrl,
+    {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+        'content-type': 'application/json',
+      },
+      body: payloadJson,
+    },
+    CONFIG.anthropicTimeoutMs,
+    'Anthropic synthesis',
+  );
+
+  console.log('[HN] Anthropic response status:', res.status);
+  if (!res.ok) {
+    const text = await res.text();
+    console.error('[HN] Anthropic error:', {
+      status: res.status,
+      statusText: res.statusText,
+      body: text.slice(0, 2000),
+    });
+    let detail = text.slice(0, 300);
+    try {
+      const parsed = JSON.parse(text);
+      detail = parsed.error?.message || parsed.message || detail;
+    } catch { /* not JSON */ }
+    throw new Error(`Anthropic API error ${res.status} (${res.statusText}): ${detail}`);
+  }
+
+  const data = await res.json();
+  const texts = (data.content || [])
+    .filter(c => c.type === 'text')
+    .map(c => c.text)
+    .filter(Boolean);
+
+  console.log('[HN] Anthropic returned', texts.length, 'text segments');
+  return texts.join('\n\n') || '*(Anthropic returned no content)*';
 }
 
 function flattenComments(node, depth = 0) {

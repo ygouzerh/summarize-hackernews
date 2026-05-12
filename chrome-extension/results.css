@@ -120,6 +120,19 @@ main {
 .content strong { font-weight: 600; }
 .content a { color: #ff6600; }
 
+.around-the-web {
+  margin-top: 24px;
+}
+
+.around-the-web > h2 {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #888;
+  margin: 0 0 8px 4px;
+}
+
 /* Spinner */
 .spinner {
   width: 16px;
