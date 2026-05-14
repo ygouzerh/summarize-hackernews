@@ -5,9 +5,14 @@
 importScripts('config.js');
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.action !== 'summarize') return;
-  handleSummarize(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));
-  return true; // keep message channel open for async response
+  if (msg.action === 'summarize') {
+    handleSummarize(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));
+    return true; // keep message channel open for async response
+  }
+  if (msg.action === 'ask-question') {
+    handleAskQuestion(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
 });
 
 async function handleSummarize({ itemId, articleUrl, title }) {
@@ -247,6 +252,22 @@ function fetchPerplexityAroundTheWeb({ articleUrl, title }, apiKey) {
     label: 'around the web',
     logKey: 'perplexity_around_web',
   }, apiKey);
+}
+
+async function handleAskQuestion({ title, articleUrl, hnCommentsSummary, history, question }) {
+  const { perplexityKey } = await chrome.storage.sync.get(['perplexityKey']);
+  if (!perplexityKey) {
+    return { error: 'Perplexity API key not set. Click the extension icon to configure it.' };
+  }
+  const answer = await callPerplexity({
+    input: CONFIG.perplexityQaInput({ title, articleUrl, hnCommentsSummary, history, question }),
+    instructions: CONFIG.perplexityQaInstructions,
+    maxOutputTokens: CONFIG.perplexityQaMaxOutputTokens,
+    timeoutMs: CONFIG.perplexityQaTimeoutMs,
+    label: 'Q&A',
+    logKey: 'perplexity_qa',
+  }, perplexityKey);
+  return { answer };
 }
 
 async function fetchAnthropicSynthesis({ articleSummary, chunkSummaries, title, isSelfPost }, apiKey) {

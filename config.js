@@ -1,11 +1,12 @@
 // Configuration for HN Summarizer — edit prompts and model settings here
 
 const CONFIG = {
-  // --- Perplexity (article research + Around-the-Web only) ---
+  // --- Perplexity (article research + Around-the-Web + Q&A) ---
   perplexityApiUrl: 'https://api.perplexity.ai/v1/agent',
   perplexityModel: 'anthropic/claude-sonnet-4-6',
   perplexityArticleMaxOutputTokens: 2048,
   perplexityAroundWebMaxOutputTokens: 1024,
+  perplexityQaMaxOutputTokens: 2048,
 
   // --- Anthropic (chunk summaries + final synthesis) ---
   anthropicApiUrl: 'https://api.anthropic.com/v1/messages',
@@ -23,6 +24,7 @@ const CONFIG = {
   algoliaTimeoutMs: 15000,
   perplexityTimeoutMs: 60000,
   perplexityAroundWebTimeoutMs: 90000,
+  perplexityQaTimeoutMs: 90000,
   anthropicTimeoutMs: 60000,
 
   // --- Prompts ---
@@ -78,5 +80,31 @@ const CONFIG = {
       ? `Article context: ${briefArticleSummary}\n\n`
       : '';
     return `${header}${context}--- COMMENT THREADS ---\n\n${chunkText}`;
+  },
+
+  // Perplexity: follow-up Q&A on a HN post.
+  perplexityQaInstructions:
+    'You answer follow-up questions about a Hacker News post the user is currently reading. Questions can range from technical clarifications to broader context.\n\n'
+    + 'You are provided: the post title, the article URL, and a pre-summarized version of the HN comments. Use web_search to read the article (start there when the question touches on article content), and use web_search freely to verify, fact-check, or extend with sources outside HN.\n\n'
+    + 'Ground your answer in the provided context where it applies; otherwise rely on web_search results. Cite sources inline using markdown links when you draw on web results. Be concise, but go in depth where the question warrants it.\n\n'
+    + 'If the supplied HN comments summary does not cover something, say so plainly rather than guessing. Respond only to the most recent "Me:" question — earlier turns are prior conversation context.',
+
+  perplexityQaInput: ({ title, articleUrl, hnCommentsSummary, history, question }) => {
+    const titleLine = `Post title: ${title || '(unknown)'}`;
+    const urlLine = articleUrl
+      ? `Article URL: ${articleUrl} (use web_search to read it if relevant)`
+      : 'Article URL: (none — this is a self-post / Ask HN / Show HN)';
+    const comments = hnCommentsSummary
+      ? `HN comments summary:\n${hnCommentsSummary}`
+      : 'HN comments summary: (not available)';
+
+    const priorTurns = (history || [])
+      .map(({ question: q, answer: a }) => `Me: ${q}\n\nYou: ${a}`)
+      .join('\n\n');
+    const conversation = priorTurns
+      ? `--- PRIOR CONVERSATION ---\n\n${priorTurns}\n\n--- NEW QUESTION ---\n\nMe: ${question}`
+      : `--- NEW QUESTION ---\n\nMe: ${question}`;
+
+    return `--- HN POST CONTEXT ---\n\n${titleLine}\n${urlLine}\n\n${comments}\n\n${conversation}`;
   },
 };

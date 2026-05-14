@@ -56,6 +56,32 @@
     </main>
   </div>
 
+  <button id="ask-fab" class="ask-fab hidden" type="button" disabled
+          aria-label="Ask a question" title="Loading summary…">
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 4V6a2 2 0 0 1 2-2z"
+            fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </button>
+
+  <aside id="ask-panel" class="ask-panel hidden" aria-hidden="true">
+    <header class="ask-panel-header">
+      <h2>Ask a question</h2>
+      <button id="ask-close" class="ask-close" type="button" aria-label="Close">×</button>
+    </header>
+    <div id="ask-conversation" class="ask-conversation">
+      <p class="ask-empty">Ask anything about this post — the HN comments summary and the article are available as context.</p>
+    </div>
+    <form id="ask-form" class="ask-form">
+      <textarea id="ask-input" rows="3" placeholder="Ask a question…"></textarea>
+      <div class="ask-form-footer">
+        <span class="ask-hint">Enter to submit · Shift+Enter for newline</span>
+        <button id="ask-submit" type="submit" disabled>Ask</button>
+      </div>
+    </form>
+  </aside>
+
   <script src="lib/marked.min.js"></script>
   <script src="results.js"></script>
 </body>

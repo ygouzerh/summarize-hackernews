@@ -9,6 +9,15 @@ const phaseStartTimes = {};
 const phaseIntervals = {};
 const phaseMeta = {};  // phase -> { label, elapsedMs }
 
+// Ask-a-question state
+const askState = {
+  articleUrl: null,
+  postTitle: null,
+  summaryText: null,
+  history: [],     // [{ question, answer }]
+  pending: false,
+};
+
 function formatMs(ms) {
   const s = Math.floor(ms / 1000);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -50,10 +59,11 @@ function handlePhaseDone({ phase, elapsedMs }) {
   if (phaseMeta[phase]) phaseMeta[phase].elapsedMs = elapsedMs;
 }
 
-function handleInit({ title, itemId, isSelfPost }) {
+function handleInit({ title, itemId, articleUrl, isSelfPost }) {
   if (title) {
     document.getElementById('post-title').textContent = title;
     document.title = `HN: ${title}`;
+    askState.postTitle = title;
   }
   if (itemId) {
     const link = document.getElementById('post-link');
@@ -63,6 +73,7 @@ function handleInit({ title, itemId, isSelfPost }) {
   if (!isSelfPost) {
     document.getElementById('around-the-web').classList.remove('hidden');
   }
+  askState.articleUrl = isSelfPost ? null : (articleUrl || null);
 }
 
 function handleResult({ summary, synthesisElapsedMs }) {
@@ -74,6 +85,8 @@ function handleResult({ summary, synthesisElapsedMs }) {
   el.classList.remove('loading');
   el.innerHTML = marked.parse(summary || '*(No content)*');
   populateTimings();
+  askState.summaryText = summary || '';
+  enableAskFab();
 }
 
 function populateTimings() {
@@ -135,3 +148,158 @@ function showError(message) {
   el.classList.remove('loading');
   el.innerHTML = '<em>Could not load summary.</em>';
 }
+
+// ----- Ask-a-question panel -----
+
+const askFab = document.getElementById('ask-fab');
+const askPanel = document.getElementById('ask-panel');
+const askClose = document.getElementById('ask-close');
+const askForm = document.getElementById('ask-form');
+const askInput = document.getElementById('ask-input');
+const askSubmit = document.getElementById('ask-submit');
+const askConversation = document.getElementById('ask-conversation');
+
+async function enableAskFab() {
+  if (!askState.summaryText) return;
+  askFab.classList.remove('hidden');
+  const { perplexityKey } = await chrome.storage.sync.get(['perplexityKey']);
+  if (perplexityKey) {
+    askFab.disabled = false;
+    askFab.title = 'Ask a question';
+  } else {
+    askFab.disabled = true;
+    askFab.title = 'Set your Perplexity API key in the extension settings to ask questions';
+  }
+}
+
+function extractHnCommentsSection(summary) {
+  if (!summary) return '';
+  const m = summary.match(/##\s+HN Comments Summary[\s\S]*?(?=\n##\s+\S|$)/i);
+  return (m ? m[0] : summary).trim();
+}
+
+function openPanel() {
+  askPanel.classList.remove('hidden');
+  askPanel.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('ask-open');
+  updateSubmitState();
+  setTimeout(() => askInput.focus(), 0);
+}
+
+function closePanel() {
+  askPanel.classList.add('hidden');
+  askPanel.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('ask-open');
+  askState.history = [];
+  askState.pending = false;
+  askInput.value = '';
+  askInput.disabled = false;
+  resetConversationDom();
+  updateSubmitState();
+}
+
+function resetConversationDom() {
+  askConversation.innerHTML = '';
+  const empty = document.createElement('p');
+  empty.className = 'ask-empty';
+  empty.textContent = 'Ask anything about this post — the HN comments summary and the article are available as context.';
+  askConversation.appendChild(empty);
+}
+
+function updateSubmitState() {
+  const hasText = askInput.value.trim().length > 0;
+  askSubmit.disabled = askState.pending || !hasText;
+}
+
+function appendQuestion(text) {
+  const empty = askConversation.querySelector('.ask-empty');
+  if (empty) empty.remove();
+  const q = document.createElement('div');
+  q.className = 'ask-turn-question';
+  q.textContent = text;
+  askConversation.appendChild(q);
+  return q;
+}
+
+function appendLoadingAnswer() {
+  const a = document.createElement('div');
+  a.className = 'ask-turn-answer loading';
+  a.innerHTML = '<div class="spinner"></div><span>Thinking…</span>';
+  askConversation.appendChild(a);
+  return a;
+}
+
+function renderAnswer(node, markdown) {
+  node.classList.remove('loading');
+  node.innerHTML = marked.parse(markdown || '*(no answer)*');
+}
+
+function renderAnswerError(node, message) {
+  node.classList.remove('loading');
+  node.classList.add('error');
+  node.textContent = `Error: ${message}`;
+}
+
+async function submitQuestion() {
+  const question = askInput.value.trim();
+  if (!question || askState.pending) return;
+
+  askState.pending = true;
+  askInput.disabled = true;
+  updateSubmitState();
+
+  appendQuestion(question);
+  const answerNode = appendLoadingAnswer();
+  askInput.value = '';
+
+  const payload = {
+    action: 'ask-question',
+    title: askState.postTitle,
+    articleUrl: askState.articleUrl,
+    hnCommentsSummary: extractHnCommentsSection(askState.summaryText),
+    history: askState.history,
+    question,
+  };
+
+  try {
+    const response = await chrome.runtime.sendMessage(payload);
+    if (!answerNode.isConnected) return; // panel was closed mid-request — discard
+    if (!response) {
+      renderAnswerError(answerNode, 'No response from extension service worker.');
+    } else if (response.error) {
+      renderAnswerError(answerNode, response.error);
+    } else {
+      renderAnswer(answerNode, response.answer);
+      askState.history.push({ question, answer: response.answer || '' });
+    }
+  } catch (err) {
+    if (answerNode.isConnected) renderAnswerError(answerNode, err.message || String(err));
+  } finally {
+    if (askPanel.classList.contains('hidden')) return;
+    askState.pending = false;
+    askInput.disabled = false;
+    updateSubmitState();
+    askInput.focus();
+  }
+}
+
+askFab.addEventListener('click', () => {
+  if (askFab.disabled) return;
+  openPanel();
+});
+
+askClose.addEventListener('click', closePanel);
+
+askInput.addEventListener('input', updateSubmitState);
+
+askInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    submitQuestion();
+  }
+});
+
+askForm.addEventListener('submit', e => {
+  e.preventDefault();
+  submitQuestion();
+});
