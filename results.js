@@ -23,6 +23,22 @@ function formatMs(ms) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
+// MV3 idle-terminates the service worker, so the first message after a pause can be
+// dropped while it wakes — sendMessage then resolves undefined or rejects transiently.
+// Retry a few times with backoff to reliably reach the worker.
+async function sendMessageWithRetry(payload, attempts = 3) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const response = await chrome.runtime.sendMessage(payload);
+      if (response) return response;
+    } catch (err) {
+      if (attempt === attempts) throw err;
+    }
+    await new Promise(resolve => setTimeout(resolve, 200 * attempt));
+  }
+  return null;
+}
+
 chrome.runtime.onMessage.addListener(msg => {
   switch (msg.type) {
     case 'init':                 handleInit(msg); break;
@@ -262,7 +278,7 @@ async function submitQuestion() {
   };
 
   try {
-    const response = await chrome.runtime.sendMessage(payload);
+    const response = await sendMessageWithRetry(payload);
     if (!answerNode.isConnected) return; // panel was closed mid-request — discard
     if (!response) {
       renderAnswerError(answerNode, 'No response from extension service worker.');
